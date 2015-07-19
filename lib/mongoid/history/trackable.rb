@@ -66,8 +66,19 @@ module Mongoid
           Thread.current[track_history_flag] = true
         end
 
+        def with_modifier(enforce_modifier, &_block)
+          Thread.current[force_modifier_key] = enforce_modifier
+          yield
+        ensure
+          Thread.current[force_modifier_key] = nil
+        end
+
         def track_history_flag
           "mongoid_history_#{name.underscore}_trackable_enabled".to_sym
+        end
+
+        def force_modifier_key
+          "mongoid_history_#{name.underscore}_force_modifier".to_sym
         end
       end
 
@@ -230,10 +241,16 @@ module Mongoid
         def history_tracker_attributes(action)
           return @history_tracker_attributes if @history_tracker_attributes
 
+          modifer = unless Thread.current[self.class.force_modifier_key].nil?
+            send("#{history_trackable_options[:modifier_field]}=".to_sym, Thread.current[self.class.force_modifier_key])
+          else
+            send(history_trackable_options[:modifier_field])
+          end
+
           @history_tracker_attributes = {
             association_chain: traverse_association_chain,
             scope: related_scope,
-            modifier: send(history_trackable_options[:modifier_field])
+            modifier: modifier
           }
 
           original, modified = transform_changes(modified_attributes_for_action(action))
@@ -278,8 +295,11 @@ module Mongoid
 
         def track_history_for_action?(action)
           track_history? &&
-            !(action.to_sym == :update && modified_attributes_for_update.blank?) &&
-            (history_trackable_options[:track_without_modifier] || !!send(history_trackable_options[:modifier_field]))
+            !(action.to_sym == :update && modified_attributes_for_update.blank?) && (
+              history_trackable_options[:track_without_modifier] ||
+              !!send(history_trackable_options[:modifier_field]) ||
+              !!Thread.current[self.class.force_modifier_key]
+            )
         end
 
         def track_history_for_action(action)
